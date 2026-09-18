@@ -3,11 +3,27 @@ import os
 from dotenv import load_dotenv
 import logging
 import json
+from time import perf_counter, sleep
+import psycopg
+from psycopg.rows import dict_row
 
 load_dotenv()
 
 GEO_LOCATOR_API_KEY = os.getenv("GEO_LOCATOR_API_KEY")
-response = requests.get("https://api.wheretheiss.at/v1/satellites/25544?")
+
+# logging.basicConfig(level=logging.DEBUG)
+
+db_config = {
+    "dbname": os.getenv("DBNAME"),
+    "user": os.getenv("USERNAME"),
+    "password": os.getenv("PASSWORD"),
+    "host": os.getenv("HOST"),
+    "port": os.getenv("PORT", 5432)
+}
+
+class IssRequest:
+    def __init__(self):
+        self.response = requests.get("https://api.wheretheiss.at/v1/satellites/25544?")
 
 class IssResponse:
     def __init__(self, _iss_api_endpoint):
@@ -70,11 +86,8 @@ class JsonFetcher:
                 self.longitude = json_rows[0]["longitude"]
                 self.velocity = json_rows[0]["velocity"]
 
-
-
-
 class GeoLocation:
-    def __init__(self, latitude, longitude, velocity, _GEO_LOCATOR_API_KEY):
+    def __init__(self, latitude, longitude, velocity, _GEO_LOCATOR_API_KEY, id):
         self.latitude = latitude
         self.longitude = longitude
         self.velocity = velocity
@@ -84,7 +97,8 @@ class GeoLocation:
         self.ocean = None
 
     def geo_location(self):
-        location = requests.get(f"https://api.opencagedata.com/geocode/v1/json?q={self.latitude}+{self.longitude}&key={self.GEO_LOCATOR_API_KEY}")
+        location = requests.get(f"https://api.opencagedata.com/geocode/v1/json?q={self.latitude}+{self.longitude}&key="
+                                f"{self.GEO_LOCATOR_API_KEY}")
 
         location_json = location.text
         locator_data = json.loads(location_json)
@@ -96,23 +110,83 @@ class GeoLocation:
         self.city = components.get("city")
         self.ocean = components.get("body_of_water")
 
+    def print_geolocation(self):
+        if self.ocean:
+            print(f"The ISS is above {self.ocean}, it's current speed is {self.velocity} kmh")
+        elif self.country and self.city:
+            print(
+                f"The ISS is above {self.country}, {self.city}, it's current speed is {self.velocity} kmh")
+        else:
+            print(f"The ISS is above{self.country}, it's current speed is {self.velocity} kmh")
+
+
+class DatabaseConnection:
+    def __init__(self, dbname, user, password, host, port):
+        self.dbname = dbname
+        self.user = user
+        self.password = password
+        self.host = host
+        self.port = port
+
+    def insert_in_db(self, latitude, longitude, velocity):
+
+        self.latitude = latitude
+        self.longitude = longitude
+        self.velocity = velocity
 
 
 
-iss_api_fetch = IssResponse(response)
-iss_api_fetch.json_write("satelite_data.json")
-json_fetch = JsonFetcher("satelite_data.json")
-json_fetch.extract_location()
-print(json_fetch.latitude)
+        with (psycopg.connect(
+            host=self.host,
+            port=self.port,
+            dbname=self.dbname,
+            user=self.user,
+            password=self.password)
+        as conn):
+            with conn.cursor() as cursor:
 
-geo_location = GeoLocation(json_fetch.latitude, json_fetch.longitude, json_fetch.velocity, GEO_LOCATOR_API_KEY)
-geo_location.geo_location()
-print(geo_location.ocean, geo_location.country, geo_location.city)
+                cursor.execute("""CREATE TABLE IF NOT EXISTS iss_loccall
+                        (lat FLOAT, 
+                        lng FLOAT,
+                        vel FLOAT
+                        )""")
 
-if geo_location.ocean:
-    print(f"The ISS is above {geo_location.ocean}, it's current speed is {geo_location.velocity}")
-elif geo_location.country and geo_location.city:
-    print(f"The ISS is above {geo_location.country}, {geo_location.city}, it's current speed is {geo_location.velocity}")
-else:
-    print(f"The ISS is above{ geo_location.country}, it's current speed is {geo_location.velocity}")
+                cursor.execute("""INSERT INTO iss_loccall VALUES (%s,%s,%s)""", (self.latitude, self.longitude, self.velocity) )
+            conn.commit()
 
+    def return_table(self):
+        with (psycopg.connect(
+            dbname=self.dbname,
+            user=self.user,
+            password=self.password,
+            host=self.host,
+            port=self.port,
+            )
+        as conn):
+            with conn.cursor(row_factory=dict_row) as cursor:
+
+                cursor.execute("""SELECT * FROM iss_loccall ORDER BY id DESC""")
+                self.a = cursor.fetchone()
+
+while True:
+    # response = IssRequest().response
+    start = perf_counter()
+
+    iss_api_fetch = IssResponse(requests.get("https://api.wheretheiss.at/v1/satellites/25544?"))
+    iss_api_fetch.json_write("satelite_data.json")
+    json_fetch = JsonFetcher("satelite_data.json")
+    json_fetch.extract_location()
+
+    db_conn = DatabaseConnection(**db_config)
+    db_conn.insert_in_db(json_fetch.latitude, json_fetch.longitude, json_fetch.velocity)
+    db_conn.return_table()
+
+
+    geo_location = GeoLocation(_GEO_LOCATOR_API_KEY = GEO_LOCATOR_API_KEY, **db_conn.a)
+    geo_location.geo_location()
+    print(geo_location.ocean, geo_location.country, geo_location.city)
+    geo_location.print_geolocation()
+
+    end = perf_counter()
+    print(end - start)
+    sleep(5)
