@@ -7,11 +7,13 @@ from time import perf_counter, sleep
 import psycopg
 from psycopg.rows import dict_row
 
+
 load_dotenv()
 
+ISS_API=os.getenv("ISS_API_KEY")
 GEO_LOCATOR_API_KEY = os.getenv("GEO_LOCATOR_API_KEY")
 
-# logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 db_config = {
     "dbname": os.getenv("DBNAME"),
@@ -22,72 +24,51 @@ db_config = {
 }
 
 class IssRequest:
-    def __init__(self):
-        self.response = requests.get("https://api.wheretheiss.at/v1/satellites/25544?")
-
-class IssResponse:
     def __init__(self, _iss_api_endpoint):
-        self.iss_api_endpoint = _iss_api_endpoint
+        self.response = requests.get(_iss_api_endpoint)
 
-    def json_write(self, file_name):
-        with open(file_name, "r+", encoding="utf-8") as file:
-            file.seek(0)
-            first_char = file.read(1)
-
-            while first_char and first_char.isspace():
-                first_char = file.read(1)
-
-            if first_char != "[":
-                file.seek(0)
-                file.truncate()
-                file.write("[\n")
-                json.dump(self.iss_api_endpoint.json(), file, indent=4)
-                file.write("\n]")
-            else:
-
-                file.seek(0, os.SEEK_END)
-                pos = file.tell()
-
-                while pos > 0:
-                    pos -= 1
-                    file.seek(pos)
-                    char = file.read(1)
-                    if char == "]":
-                        file.seek(pos)
-                        file.truncate()
-                        break
-
-                if first_char == "[":
-                    file.write(",\n")
-                    json.dump(self.iss_api_endpoint.json(), file, indent=4)
-                    file.write("\n]")
-                else:
-                    file.write("\n")
-                    json.dump(self.iss_api_endpoint.json(), file, indent=4)
 
 class JsonFetcher:
-    def __init__(self, file_name):
+    def __init__(self, file_name, _iss_api_endpoint):
         self.file_name = file_name
         self.latitude = None
         self.longitude = None
         self.velocity = None
+        self.iss_api_endpoint = _iss_api_endpoint
 
-    def extract_location(self):
+    def _json_write(self):
+        data_list = []
+
+        if os.path.exists(self.file_name) and os.path.getsize(self.file_name) > 0:
+            with open(self.file_name, "r", encoding="utf-8") as file:
+                data_list = json.load(file)
+
+        data_list.append(self.iss_api_endpoint.json())
+
+        with open(self.file_name, "w", encoding="utf-8") as file:
+            file.seek(0, 2)
+            dmp = json.dump(data_list, file, indent=4)
+
+
+    def _extract_location(self):
         with open(self.file_name, "r+", encoding="utf-8") as file:
             json_rows = json.load(file)
             json_rows_length = len(json_rows)
 
-            if json_rows_length > 0:
-                self.latitude = json_rows[json_rows_length-1]["latitude"]
-                self.longitude = json_rows[json_rows_length-1]["longitude"]
-                self.velocity = json_rows[json_rows_length-1]["velocity"]
-            else:
-                self.latitude = json_rows[0]["latitude"]
-                self.longitude = json_rows[0]["longitude"]
-                self.velocity = json_rows[0]["velocity"]
+            self.latitude = json_rows[-1]["latitude"]
+            self.longitude = json_rows[-1]["longitude"]
+            self.altitude = json_rows[-1]["altitude"]
+            self.velocity = json_rows[-1]["velocity"]
+            self.visibility = json_rows[-1]["visibility"]
+            self.footprint = json_rows[-1]["footprint"]
+            self.timestamp = json_rows[-1]["timestamp"]
+            self.daynum = json_rows[-1]["daynum"]
+            self.solar_lat = json_rows[-1]["solar_lat"]
+            self.solar_lon = json_rows[-1]["solar_lon"]
+            self.units = json_rows[-1]["units"]
 
 class GeoLocation:
-    def __init__(self, latitude, longitude, velocity, _GEO_LOCATOR_API_KEY, id):
+    def __init__(self, latitude, longitude, velocity, _GEO_LOCATOR_API_KEY):
         self.latitude = latitude
         self.longitude = longitude
         self.velocity = velocity
@@ -96,7 +77,7 @@ class GeoLocation:
         self.city = None
         self.ocean = None
 
-    def geo_location(self):
+    def _geo_location(self):
         location = requests.get(f"https://api.opencagedata.com/geocode/v1/json?q={self.latitude}+{self.longitude}&key="
                                 f"{self.GEO_LOCATOR_API_KEY}")
 
@@ -112,12 +93,12 @@ class GeoLocation:
 
     def print_geolocation(self):
         if self.ocean:
-            print(f"The ISS is above {self.ocean}, it's current speed is {self.velocity} kmh")
+            # logging.info(f"The ISS is above {self.ocean}, it's current speed is {self.velocity} kmh")
+            return f"The ISS is above {self.ocean}, it's current speed is {self.velocity} kmh"
         elif self.country and self.city:
-            print(
-                f"The ISS is above {self.country}, {self.city}, it's current speed is {self.velocity} kmh")
+            return f"The ISS is above {self.country}, {self.city}, it's current speed is {self.velocity} kmh"
         else:
-            print(f"The ISS is above{self.country}, it's current speed is {self.velocity} kmh")
+            return f"The ISS is above {self.country}, it's current speed is {self.velocity} kmh"
 
 
 class DatabaseConnection:
@@ -128,13 +109,37 @@ class DatabaseConnection:
         self.host = host
         self.port = port
 
-    def insert_in_db(self, latitude, longitude, velocity):
+    def check_tables_exists(self):
+        with (psycopg.connect(
+            host=self.host,
+            port=self.port,
+            dbname=self.dbname,
+            user=self.user,
+            password=self.password)
+        as conn):
+            with conn.cursor() as cursor:
+                cursor.execute("""CREATE TABLE IF NOT EXISTS iss_locccallll
+                        (   latitude FLOAT,
+                            longitude FLOAT,
+                            altitude FLOAT,
+                            velocity FLOAT,
+                            visibility TEXT,
+                            footprint FLOAT,
+                            timestamp INT,
+                            daynum FLOAT,
+                            solar_lat FLOAT,
+                            solar_lon FLOAT,
+                            units TEXT,
+                            id INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY
+                        )""")
+                cursor.execute("""CREATE TABLE IF NOT EXISTS human_readable_table
+                        (
+                            id INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                            readable_log TEXT
+                        )""")
 
-        self.latitude = latitude
-        self.longitude = longitude
-        self.velocity = velocity
-
-
+    def insert_in_iss_table(self, latitude, longitude, altitude, velocity, visibility, footprint, timestamp,
+                     daynum, solar_lat, solar_lon, units):
 
         with (psycopg.connect(
             host=self.host,
@@ -144,49 +149,56 @@ class DatabaseConnection:
             password=self.password)
         as conn):
             with conn.cursor() as cursor:
-
-                cursor.execute("""CREATE TABLE IF NOT EXISTS iss_loccall
-                        (lat FLOAT, 
-                        lng FLOAT,
-                        vel FLOAT
-                        )""")
-
-                cursor.execute("""INSERT INTO iss_loccall VALUES (%s,%s,%s)""", (self.latitude, self.longitude, self.velocity) )
+                cursor.execute("""INSERT INTO iss_locccallll VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                               (latitude, longitude, altitude, velocity, visibility, footprint,
+                                timestamp, daynum, solar_lat, solar_lon, units) )
+                self.last_data = cursor.fetchone()
+                print (self.last_data)
+                cursor.execute("""SELECT visibility FROM iss_locccallll GROUP BY visibility 
+                                    ORDER BY COUNT(*) DESC
+                                    LIMIT 1;""")
+                self.often_visibility = cursor.fetchone()[0]
             conn.commit()
 
-    def return_table(self):
+    def insert_in_readable_table(self, text:str):
         with (psycopg.connect(
-            dbname=self.dbname,
-            user=self.user,
-            password=self.password,
             host=self.host,
             port=self.port,
-            )
+            dbname=self.dbname,
+            user=self.user,
+            password=self.password)
         as conn):
-            with conn.cursor(row_factory=dict_row) as cursor:
+            with conn.cursor() as cursor:
+                cursor.execute("""INSERT INTO human_readable_table (readable_log) VALUES (%s) """, (text, ))
+            conn.commit()
 
-                cursor.execute("""SELECT * FROM iss_loccall ORDER BY id DESC""")
-                self.a = cursor.fetchone()
 
-while True:
-    # response = IssRequest().response
-    start = perf_counter()
 
-    iss_api_fetch = IssResponse(requests.get("https://api.wheretheiss.at/v1/satellites/25544?"))
-    iss_api_fetch.json_write("satelite_data.json")
-    json_fetch = JsonFetcher("satelite_data.json")
-    json_fetch.extract_location()
-
+if __name__ == "__main__":
     db_conn = DatabaseConnection(**db_config)
-    db_conn.insert_in_db(json_fetch.latitude, json_fetch.longitude, json_fetch.velocity)
-    db_conn.return_table()
+    db_conn.check_tables_exists()
 
+    while True:
+        start = perf_counter()
+        iss_api_fetch = IssRequest(ISS_API).response
+        iss_api_fetch.json()
+        json_fetch = JsonFetcher("satelite_data.json", iss_api_fetch)
+        json_fetch._json_write()
+        json_fetch._extract_location()
 
-    geo_location = GeoLocation(_GEO_LOCATOR_API_KEY = GEO_LOCATOR_API_KEY, **db_conn.a)
-    geo_location.geo_location()
-    print(geo_location.ocean, geo_location.country, geo_location.city)
-    geo_location.print_geolocation()
+        db_conn.insert_in_iss_table(json_fetch.latitude, json_fetch.longitude, json_fetch.altitude,json_fetch.velocity,
+                             json_fetch.visibility, json_fetch.footprint,json_fetch.timestamp, json_fetch.daynum, json_fetch.solar_lat,
+                             json_fetch.solar_lon, json_fetch.units)
+        # db_conn.return_table()
 
-    end = perf_counter()
-    print(end - start)
-    sleep(5)
+        geo_location = GeoLocation(db_conn.last_data[0], db_conn.last_data[1],
+                        db_conn.last_data[3], _GEO_LOCATOR_API_KEY = GEO_LOCATOR_API_KEY)
+        geo_location._geo_location()
+        logging.info(geo_location.print_geolocation())
+        db_conn.insert_in_readable_table(geo_location.print_geolocation())
+
+        print(f"The satellite is more often in the {db_conn.often_visibility} state ")
+
+        end = perf_counter()
+        print(end - start)
+        sleep(5)
