@@ -1,3 +1,4 @@
+#Database Connection File
 import psycopg
 
 class DatabaseConnector:
