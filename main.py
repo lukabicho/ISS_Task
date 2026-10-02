@@ -7,11 +7,12 @@ from GeoLocation import GeoLocation
 from JsonReader import JsonReader
 from JsonWriter import JsonWriter
 from DatabaseConnector import DatabaseConnector
+from db_config_file import DbConfig
 
 def main():
     load_dotenv()
 
-    iss_api_key=os.getenv("ISS_API_KEY")
+    iss_api_url=os.getenv("ISS_API_URL")
     geo_locator_api_key = os.getenv("GEO_LOCATOR_API_KEY")
 
     logging.basicConfig(
@@ -23,16 +24,14 @@ def main():
         ]
     )
 
-    db_config = {
-        "dbname": os.getenv("DBNAME"),
-        "user": os.getenv("USERNAME"),
-        "password": os.getenv("PASSWORD"),
-        "host": os.getenv("HOST"),
-        "port": os.getenv("PORT", 5432)
-    }
+    """Used to change color of time needed to load the program"""
+    GREEN = "\033[32m"
+    RESET = "\033[0m"
+
+    db_config = DbConfig.db_config
 
     db_conn = DatabaseConnector(db_config)
-    iss_api_call = IssRequest(iss_api_key)
+    iss_api_call = IssRequest(iss_api_url)
     json_reader = JsonReader("satellite_data.jsonl")
     json_writer = JsonWriter("satellite_data.jsonl")
     time_interval = 15
@@ -65,7 +64,7 @@ def main():
         logging.info(f"The satellite is more often in the {db_conn.often_visibility()} state ")
 
         end = perf_counter()
-        print(end - start)
+        logging.info(f"{GREEN}Time needed to load the program {end - start} seconds. {RESET}")
         sleep(time_interval)
 
 if __name__ == '__main__':

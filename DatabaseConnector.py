@@ -1,4 +1,7 @@
 import psycopg
+import logging
+
+logger = logging.getLogger(__name__)
 
 class DatabaseConnector:
     def __init__(self, db_params: dict):
@@ -83,18 +86,29 @@ class DatabaseConnector:
                 return latest_ts - previous_ts
 
     def often_visibility(self):
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""SELECT visibility
-                                  FROM iss_data
-                                  GROUP BY visibility
-                                  ORDER BY COUNT(*) DESC LIMIT 1;""")
-                return cursor.fetchone()[0]
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""SELECT visibility
+                                      FROM iss_data
+                                      GROUP BY visibility
+                                      ORDER BY COUNT(*) DESC LIMIT 1;""")
+                    row = cursor.fetchone()[0]
+                    return row if row else None
+        except Exception as exception:
+            logger.error(f"Error fetching most frequent visibility: {exception}")
+            return 0
+
+
 
     def last_velocity(self):
-        with self._get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""SELECT velocity
-                                  FROM iss_data
-                                  ORDER BY uid DESC LIMIT 1;""")
-                return cursor.fetchone()[0]
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""SELECT velocity
+                                      FROM iss_data
+                                      ORDER BY uid DESC LIMIT 1;""")
+                    return cursor.fetchone()[0]
+        except Exception as exception:
+            logger.error(f"Error fetching most frequent visibility: {exception}")
+            return 0

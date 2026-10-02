@@ -4,6 +4,7 @@ class JsonReader:
     def __init__(self, file_name):
         self.file_name = file_name
 
+    """Generator is used here to yield records from a json file, in case there are many newer records in the datalake compared to the database"""
     def json_read(self, latest_timestamp):
         with open(self.file_name, "r", encoding="utf-8") as file:
             for line in file:
